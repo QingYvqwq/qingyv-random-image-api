@@ -1,0 +1,21 @@
+# 统一换行符：仓库内一律存 LF，避免 Windows 与 Linux 构建环境行为不一致。
+# public/_headers 与 _routes.json 由 Cloudflare Pages 在 Linux 上解析，
+# 保持 LF 可以避免出现难以排查的解析问题。
+* text=auto eol=lf
+
+# 图片一律按二进制处理，禁止 Git 做任何换行转换或差异计算。
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.bmp binary
+*.avif binary
+*.tif binary
+*.tiff binary
+*.svg binary
+
+# 锁文件与生成的索引：在合并时不做逐行冲突处理
+package-lock.json -diff
+data/images.json -diff
+functions/_data/images.generated.js linguist-generated=true

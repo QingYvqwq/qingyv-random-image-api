@@ -1,0 +1,30 @@
+{
+  "_comment": "随机图片 API 的构建配置。修改后重新运行 npm run build 生效。",
+
+  "imagesDir": "images",
+  "_imagesDir": "原始图片所在的源目录，相对于项目根目录。脚本会递归扫描。图片文件名不会被修改或重命名。",
+
+  "urlPrefix": "images",
+  "_urlPrefix": "图片在网站上的公开访问前缀，最终 URL 形如 /images/<相对路径>。索引中的路径必须与实际部署文件一致。",
+
+  "excludeDirs": ["node_modules", ".git", ".wrangler", "public", "tests", "scripts", "functions", "data", "docs"],
+  "_excludeDirs": "扫描时跳过的目录名（任意层级匹配）。",
+
+  "deployMaxBytes": 26214400,
+  "_deployMaxBytes": "Cloudflare Pages 单文件硬上限 25 MiB (26214400 字节)。超过该值的文件无法部署，会被重新编码为同尺寸副本。",
+
+  "optimizeThresholdBytes": 24117248,
+  "_optimizeThresholdBytes": "超过该值（23 MiB）即触发重新编码，为 25 MiB 硬上限预留安全余量。原文件不会被修改。",
+
+  "optimizeQualityLadder": [82, 70, 58, 45],
+  "_optimizeQualityLadder": "重新编码时依次尝试的质量档位，直到体积低于 optimizeThresholdBytes。",
+
+  "maxScanBytes": 209715200,
+  "_maxScanBytes": "单个文件超过该体积（200 MiB）时不再读取识别，直接记为跳过，避免构建卡死。",
+
+  "allowedFormats": ["jpg", "png", "webp", "gif", "bmp", "avif", "tiff"],
+  "_allowedFormats": "允许进入索引的图片格式（白名单）。image-size 识别出的真实格式必须在此列表内。",
+
+  "blockedFormats": ["svg"],
+  "_blockedFormats": "显式禁用的格式。SVG 可内嵌 <script>、外链与事件属性，属于主动内容，默认不索引、不部署。"
+}

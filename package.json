@@ -1,0 +1,28 @@
+{
+  "name": "qingyv-random-image-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "基于 Cloudflare Pages + Pages Functions 的随机图片 API，使用图片实际尺寸与 EXIF 方向进行横竖屏筛选。",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "index": "node scripts/build-index.mjs",
+    "sync": "node scripts/sync-images.mjs",
+    "build": "node scripts/build-index.mjs && node scripts/sync-images.mjs",
+    "stats": "node scripts/build-index.mjs --stats-only",
+    "verify": "node scripts/verify.mjs",
+    "fixtures": "node scripts/make-test-fixtures.mjs",
+    "test": "node --test",
+    "dev": "npm run build && wrangler pages dev",
+    "deploy": "npm run build && wrangler pages deploy"
+  },
+  "dependencies": {
+    "image-size": "^2.0.4",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "wrangler": "^4.149.0"
+  }
+}

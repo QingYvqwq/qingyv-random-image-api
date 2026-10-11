@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+
+# 构建产物：public/images 由 scripts/sync-images.mjs 从源图片目录生成
+# 原始图片保存在源目录（默认 images/）中，只提交一次，避免仓库重复存储
+public/images/
+
+# Wrangler / Cloudflare 本地状态与本地环境变量
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+!.env.example
+
+# 测试与临时产物
+tests/tmp/
+coverage/
+*.tmp
+*.log
+npm-debug.log*
+
+# 编辑器 / 操作系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

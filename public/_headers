@@ -1,0 +1,18 @@
+# Cloudflare Pages 静态资源响应头
+# 说明：随机跳转接口 / 由 Functions 自身设置 Cache-Control: no-store，
+#      本文件只作用于静态资源（图片），不会影响接口的随机性。
+
+# 静态图片：7 天浏览器/CDN 缓存 + 1 天 stale-while-revalidate。
+# 图片文件名不含内容哈希，若换成 immutable 会导致替换图片后长期无法生效，
+# 因此这里刻意使用可过期的 max-age。
+#
+# 注意：Cloudflare Pages 会叠加所有匹配的规则，因此安全响应头只在下方 /*
+# 中声明一次，避免重复添加同名头。
+/images/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+# 兜底：其余静态资源的安全响应头
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Robots-Tag: noindex
