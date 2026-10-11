@@ -3,7 +3,14 @@
 一个部署在 Cloudflare Pages 上的随机图片 API。访问根路径直接在浏览器里显示一张随机图片，
 并支持按横屏 / 竖屏 / 方形筛选。
 
-目标域名：**`api.qingyv.top`**（尚未部署，当前状态见文末「部署进度」）
+**线上地址：<https://api.qingyv.top>** —— 已部署并通过验收。
+
+| | |
+|---|---|
+| 生产域名 | <https://api.qingyv.top> |
+| Pages 默认域名 | <https://qingyv-random-image-api.pages.dev> |
+| GitHub 仓库 | <https://github.com/QingYvqwq/qingyv-random-image-api> |
+| 图片数量 | 205 张（横屏 146 / 竖屏 57 / 方形 2） |
 
 不需要独立服务器、数据库、Docker 或任何常驻进程。图片和代码都存放在 GitHub，
 由 Cloudflare Pages 在每次提交后自动构建并发布。
@@ -378,9 +385,37 @@ Cloudflare API Token（**不需要** Access Key ID / Secret Access Key / S3 端�
 - [x] 图片索引生成与校验脚本
 - [x] Pages Functions 随机跳转接口
 - [x] 缓存策略与路由隔离
-- [x] 自动化测试
+- [x] 自动化测试（53 项）
 - [x] 本地 Cloudflare 环境验证
-- [ ] 创建 GitHub 仓库
-- [ ] 部署到 Cloudflare Pages
-- [ ] 绑定 `api.qingyv.top`
-- [ ] 线上验收
+- [x] 创建 GitHub 仓库并推送（含 205 张图片）
+- [x] 部署到 Cloudflare Pages（GitHub 集成，推送后自动构建）
+- [x] 绑定 `api.qingyv.top` 并签发 HTTPS 证书
+- [x] 线上验收（29 项全部通过）
+
+---
+
+## 从本机推送的注意事项
+
+本机所在网络**无法直连 `github.com:443`**（连接超时），但 `ssh.github.com:443` 可用。
+因此本仓库的 `origin` 使用 SSH over 443，相关配置写在 `.git/config`（不随仓库分发）：
+
+```bash
+git remote get-url origin
+# git@ssh.github.com:QingYvqwq/qingyv-random-image-api.git
+
+git config core.sshCommand
+# ssh -i ~/.ssh/id_ed25519_qingyv_api -p 443 -o StrictHostKeyChecking=accept-new
+```
+
+`~/.ssh/id_ed25519_qingyv_api` 是专为本仓库生成的密钥，已作为
+[Deploy key](https://github.com/QingYvqwq/qingyv-random-image-api/settings/keys)
+注册到该仓库（带 write 权限，仅限这一个仓库）。
+
+**如果在新机器上克隆本仓库**，需要重新生成密钥并使用上面的命令配置 `origin`，
+否则 `git push` 会卡在 `github.com` 超时。也可以临时改用 HTTPS 推送：
+
+```bash
+git remote set-url origin https://<用户名>:<PersonalAccessToken>@github.com/QingYvqwq/qingyv-random-image-api.git
+```
+
+> 不要把带 Token 的地址写入脚本或提交到仓库。
