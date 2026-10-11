@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { imageSize } from 'image-size';
 import { buildIndex } from '../scripts/lib/index-builder.mjs';
 import { syncImages } from '../scripts/lib/sync.mjs';
 import { verifyIndex } from '../scripts/lib/verify.mjs';
 import { createHandler } from '../functions/_lib/handler.js';
-import { createTempProject, makeContext, sequenceRandom } from './helpers.mjs';
+import { createTempProject, makeContext, directoryAssets } from './helpers.mjs';
 
 const ORIGIN = 'https://api.qingyv.top';
 
@@ -22,6 +23,24 @@ async function runPipeline(options = {}) {
 const full = await runPipeline();
 test.after(() => full.project.cleanup());
 
+/** 用真实部署目录作为 ASSETS 绑定 */
+const assets = directoryAssets(full.project.config.publicDir);
+
+const ENTRIES = full.index.images.map((image) => ({
+  p: image.path,
+  w: image.width,
+  h: image.height,
+  o: image.orientation,
+}));
+
+function contextFor(query = '') {
+  return makeContext(`${ORIGIN}/${query}`, 'GET', { ASSETS: assets });
+}
+
+function deployedPath(entryPath) {
+  return path.join(full.project.config.publicDir, entryPath);
+}
+
 test('完整流水线（索引 -> 同步 -> 校验）全部通过', () => {
   assert.equal(full.sync.failed.length, 0, `同步失败: ${JSON.stringify(full.sync.failed)}`);
   assert.equal(full.verification.errors.length, 0, `校验失败: ${full.verification.errors.join('; ')}`);
@@ -31,7 +50,7 @@ test('完整流水线（索引 -> 同步 -> 校验）全部通过', () => {
 test('索引中的每一条路径都对应真实存在的部署文件', () => {
   assert.ok(full.index.images.length > 0);
   for (const image of full.index.images) {
-    const deployed = path.join(full.project.config.deployDir, image.sourcePath);
+    const deployed = deployedPath(image.path);
     assert.ok(existsSync(deployed), `部署文件缺失: ${image.path}`);
     assert.ok(statSync(deployed).size > 0, `部署文件为空: ${image.path}`);
   }
@@ -49,78 +68,63 @@ test('原样复制的部署文件与源文件字节完全一致', () => {
   for (const image of full.index.images) {
     if (image.bytes > full.project.config.optimizeThresholdBytes) continue;
     const source = path.join(full.project.config.sourceDir, image.sourcePath);
-    const deployed = path.join(full.project.config.deployDir, image.sourcePath);
+    const deployed = deployedPath(image.path);
     assert.deepEqual(readFileSync(deployed), readFileSync(source), `${image.path} 内容不一致`);
   }
 });
 
-test('接口跳转目标与真实部署文件逐一对应（全量遍历）', async () => {
-  const entries = full.index.images.map((image) => ({
-    p: image.path,
-    w: image.width,
-    h: image.height,
-    o: image.orientation,
-  }));
-  const { onRequest } = createHandler(entries, {
-    randomUint32: sequenceRandom(Array.from({ length: entries.length }, (_, i) => i)),
-  });
+test('接口返回的图片字节与部署文件逐字节一致（逐张指定抽取）', async () => {
+  // 注意：样本里有多张内容完全相同的图片（同一张纯色 PNG），
+  // 所以不能用「按内容反查」来判定，必须用确定的随机源锁定索引下标。
+  for (let i = 0; i < ENTRIES.length; i += 1) {
+    const { onRequest } = createHandler(ENTRIES, { randomUint32: () => i });
+    const response = await onRequest(contextFor());
+    assert.equal(response.status, 200, `抽取第 ${i} 张时失败`);
 
-  const resolved = new Set();
-  for (let i = 0; i < entries.length; i += 1) {
-    const response = await onRequest(makeContext(`${ORIGIN}/`));
-    assert.equal(response.status, 302);
-    const location = response.headers.get('Location');
-    const url = new URL(location);
-
-    // 用请求域名还原出部署目录中的真实文件路径
-    const relative = decodeURIComponent(url.pathname).replace(/^\//, '');
-    const deployed = path.join(full.project.config.publicDir, relative);
-    assert.ok(existsSync(deployed), `跳转目标不存在: ${location} -> ${deployed}`);
-    resolved.add(location);
+    const body = Buffer.from(await response.arrayBuffer());
+    assert.deepEqual(body, readFileSync(deployedPath(ENTRIES[i].p)), `${ENTRIES[i].p} 字节不一致`);
   }
-  assert.equal(resolved.size, entries.length, '应当能覆盖到每一张图片');
 });
 
-test('按方向筛选时跳转目标全部真实存在且方向正确', async () => {
-  const entries = full.index.images.map((image) => ({
-    p: image.path,
-    w: image.width,
-    h: image.height,
-    o: image.orientation,
-  }));
-  const { onRequest } = createHandler(entries);
-
+test('指定方向时返回的图片方向全部正确（逐张校验）', async () => {
   for (const orientation of ['landscape', 'portrait', 'square']) {
-    for (let i = 0; i < 20; i += 1) {
-      const response = await onRequest(makeContext(`${ORIGIN}/?orientation=${orientation}`));
-      assert.equal(response.status, 302, `${orientation} 应当有可用图片`);
-      const url = new URL(response.headers.get('Location'));
-      const relative = decodeURIComponent(url.pathname).replace(/^\//, '');
-      assert.ok(existsSync(path.join(full.project.config.publicDir, relative)));
+    const pool = ENTRIES.filter((entry) => entry.o === orientation);
+    assert.ok(pool.length > 0, `${orientation} 应当有可用图片`);
 
-      const expected = entries.find((entry) => entry.p === relative);
-      assert.equal(expected.o, orientation, `返回了方向不符的图片: ${relative}`);
+    for (let i = 0; i < pool.length; i += 1) {
+      const { onRequest } = createHandler(ENTRIES, { randomUint32: () => i });
+      const response = await onRequest(contextFor(`?orientation=${orientation}`));
+      assert.equal(response.status, 200);
+
+      const body = Buffer.from(await response.arrayBuffer());
+      assert.deepEqual(
+        body,
+        readFileSync(deployedPath(pool[i].p)),
+        `?orientation=${orientation} 返回了第 ${i} 张，与预期的 ${pool[i].p} 不符`
+      );
+      assert.equal(pool[i].o, orientation);
     }
   }
 });
 
-test('中文与含空格文件名的图片可以通过跳转地址直接打开', async () => {
-  const entries = full.index.images.map((image) => ({
-    p: image.path,
-    w: image.width,
-    h: image.height,
-    o: image.orientation,
-  }));
-  const index = entries.findIndex((entry) => entry.p.includes('示例 图片'));
+test('中文与含空格文件名的图片可以正常返回', async () => {
+  const landscapePool = ENTRIES.filter((entry) => entry.o === 'landscape');
+  const index = landscapePool.findIndex((entry) => entry.p.includes('示例 图片'));
   assert.ok(index >= 0, '样本中应包含中文文件名图片');
 
-  const { onRequest } = createHandler(entries, { randomUint32: () => index });
-  const response = await onRequest(makeContext(`${ORIGIN}/?orientation=landscape`));
-  const location = response.headers.get('Location');
-  assert.ok(!location.includes(' '));
+  const { onRequest } = createHandler(ENTRIES, { randomUint32: () => index });
+  const response = await onRequest(contextFor('?orientation=landscape'));
+  assert.equal(response.status, 200);
 
-  const relative = decodeURIComponent(new URL(location).pathname).replace(/^\//, '');
-  assert.ok(existsSync(path.join(full.project.config.publicDir, relative)), '中文文件名对应的文件应存在');
+  const body = Buffer.from(await response.arrayBuffer());
+  assert.deepEqual(body, readFileSync(deployedPath(landscapePool[index].p)));
+});
+
+test('响应头不会泄露静态资源自带的长缓存（否则刷新换不了图）', async () => {
+  const { onRequest } = createHandler(ENTRIES, () => 0);
+  const response = await onRequest(contextFor());
+  assert.equal(response.headers.get('Cache-Control'), 'no-store, max-age=0, must-revalidate');
+  assert.equal(response.headers.get('Location'), null);
 });
 
 test('超出体积阈值的图片会生成同尺寸压缩副本，且原图不被修改', async () => {
@@ -156,7 +160,6 @@ test('超出体积阈值的图片会生成同尺寸压缩副本，且原图不�
     for (const image of index.images) {
       const deployed = path.join(project.config.deployDir, image.sourcePath);
       if (!existsSync(deployed)) continue;
-      const { imageSize } = await import('image-size');
       const meta = imageSize(readFileSync(deployed));
       assert.equal(meta.width, image.width, `${image.path} 压缩后宽度变化`);
       assert.equal(meta.height, image.height, `${image.path} 压缩后高度变化`);
@@ -188,7 +191,6 @@ test('无法压缩的超大图片会被明确报告为同步失败', async () =>
 test('索引过期（源文件被删除）时同步会报错而不是静默输出不完整结果', async () => {
   const project = createTempProject({ fixtures: ['landscape.png', 'square.png'] });
   try {
-    const { rmSync } = await import('node:fs');
     await buildIndex(project.config);
     rmSync(path.join(project.config.sourceDir, 'square.png'));
 
@@ -209,7 +211,6 @@ test('校验能发现索引与部署目录不一致', async () => {
     await buildIndex(project.config);
     await syncImages(project.config);
 
-    // 手工塞入一个索引外的文件
     mkdirSync(project.config.deployDir, { recursive: true });
     writeFileSync(path.join(project.config.deployDir, 'sneaky.png'), 'not-in-index');
 

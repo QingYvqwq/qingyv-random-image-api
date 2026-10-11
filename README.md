@@ -48,16 +48,38 @@ Cloudflare Pages 构建（npm run build）
    │     超过体积阈值的图片生成同尺寸压缩副本（原图不动）
    ▼
 Cloudflare 边缘节点
-   │  ④ 访问 /            -> Pages Function 挑选一张图，返回 302 跳转
+   │  ④ 访问 /            -> Pages Function 挑选一张图，直接把图片内容返回
    │  ⑤ 访问 /images/x.jpg -> 直接由 CDN 返回静态文件，不经过函数
 ```
 
 关键设计：
 
 - **索引在构建期生成**，接口运行时既不扫描目录，也不调用 GitHub API。
-- **接口只做「选图 + 302」**，不传输图片二进制，因此函数不会成为带宽瓶颈。
-- **`public/_routes.json` 把函数触发范围限定为 `/`**，图片请求完全绕过函数。
+- **`/` 直接返回图片字节，不做任何跳转。** 这一点很重要，原因见下节。
+- **`public/_routes.json` 把函数触发范围限定为 `/`**，`/images/**` 的图片请求完全绕过函数。
 - **`public/` 下没有 `index.html`**，所以根路径不会被静态首页抢占。
+
+### 为什么不用 302 跳转
+
+最初的实现是 `/` 返回 `302` 跳到 `/images/xxx.webp`。这会导致一个用户体验问题：
+
+```
+输入 https://api.qingyv.top/
+  → 302，浏览器地址栏变成 https://api.qingyv.top/images/000017.webp
+  → 用户按 F5，刷新的是【图片地址】而不是 /
+  → 而且该图片被缓存 7 天 → 永远显示同一张
+```
+
+只有让 `/` **本身**返回图片内容，地址栏才会一直停在 `https://api.qingyv.top`，
+每次刷新都是一次全新的随机请求。
+
+代价（如实说明）：
+
+- 每次访问 `/` 都会消耗 **1 次 Pages Functions 调用**（免费套餐 100,000 次/天）。
+  直接访问 `/images/xxx.webp` 则不消耗函数调用。
+- `/` 的响应是 `no-store`，**图片不会被浏览器缓存**，每次刷新都重新下载。
+  这是「刷新换图」的必要代价。若你希望缓存，请直接引用 `/images/xxx.webp`。
+- 图片字节经由函数的 `env.ASSETS` 绑定读取，走的是 Cloudflare 内部链路，不产生外部请求。
 
 ---
 
@@ -71,7 +93,7 @@ api/
 │  ├─ _headers                      # 静态资源缓存与安全响应头
 │  └─ _routes.json                  # 限定函数只处理 "/"
 ├─ functions/                       # Cloudflare Pages Functions
-│  ├─ index.js                      # 根路径随机跳转入口
+│  ├─ index.js                      # 根路径随机图片入口
 │  ├─ _lib/handler.js               # 参数校验、随机抽取、响应构造
 │  └─ _data/images.generated.js     # 构建期生成的内嵌索引（自动生成，勿手改）
 ├─ scripts/
@@ -117,10 +139,10 @@ npm test
 
 | 请求 | 说明 | 状态码 |
 |---|---|---|
-| `GET /` | 从全部图片中随机跳转 | 302 |
-| `GET /?orientation=landscape` | 只从横屏图片中随机跳转 | 302 |
-| `GET /?orientation=portrait` | 只从竖屏图片中随机跳转 | 302 |
-| `GET /?orientation=square` | 只从方形图片中随机跳转 | 302 |
+| `GET /` | 从全部图片中随机返回一张图片 | 200 |
+| `GET /?orientation=landscape` | 只从横屏图片中随机返回 | 200 |
+| `GET /?orientation=portrait` | 只从竖屏图片中随机返回 | 200 |
+| `GET /?orientation=square` | 只从方形图片中随机返回 | 200 |
 | 方向参数非法 | 返回纯文本错误说明 | 400 |
 | 查询参数不在允许列表内 | 返回纯文本错误说明 | 400 |
 | 指定方向没有可用图片 | 返回纯文本错误说明 | 404 |
@@ -146,9 +168,10 @@ npm test
 
 **响应头**：
 
-- 所有接口响应都带 `Cache-Control: no-store, max-age=0, must-revalidate`，保证随机性。
-- 跳转响应额外带 `Access-Control-Allow-Origin: *`，方便前端直接引用。
-- 静态图片由 `public/_headers` 配置为 `public, max-age=604800, stale-while-revalidate=86400`。
+- 所有接口响应都带 `Cache-Control: no-store, max-age=0, must-revalidate`，保证刷新必定换图。
+- 成功响应带 `Access-Control-Allow-Origin: *`，方便前端直接用 `<img>` 或 CSS 引用。
+- 直接访问 `/images/xxx.webp` 时由 `public/_headers` 配置为
+  `public, max-age=604800, stale-while-revalidate=86400`，7 天缓存。
 
 **使用示例**：
 
@@ -262,8 +285,11 @@ Cloudflare Pages 检测到推送后会自动重新构建并发布。
 - **图片文件名不含内容哈希。** 因此静态缓存使用可过期的 `max-age` 而不是 `immutable`；
   替换同名图片后，最长需要 7 天 CDN 缓存才会完全刷新。
 - **免费套餐不承诺速度与配额。** Cloudflare Pages 免费版有每月构建次数、单文件
-  25 MiB、单次部署 20000 个文件的限制。中国大陆的访问速度取决于 Cloudflare 的
-  网络状况，不做任何保证。
+  25 MiB、单次部署 20000 个文件的限制；Pages Functions 免费额度为
+  **100,000 次调用/天**，每次访问 `/` 消耗 1 次。中国大陆的访问速度取决于
+  Cloudflare 的网络状况，不做任何保证。
+- **`/` 的图片不被浏览器缓存**（`no-store`），每次刷新都会重新下载完整图片。
+  平均每张约 1.3 MiB，请注意流量。这是换取「刷新换图」的必要代价。
 - **仓库体积。** 图片直接存在 Git 仓库里，仓库会随图片增长。GitHub 对单个文件有
   100 MB 硬限制、对仓库有约 1 GB 的软性警告线。
 
@@ -374,7 +400,9 @@ Cloudflare API Token（**不需要** Access Key ID / Secret Access Key / S3 端�
 | 访问 `/` 返回 400 | URL 里有拼错的参数。只支持 `?orientation=landscape\|portrait\|square` |
 | 部署失败，提示文件过大 | `public/images/` 里有超过 25 MiB 的文件。运行 `npm run build`，脚本会自动为超大图生成压缩副本 |
 | 部署后图片 404 | `public/images/` 与索引不同步。运行 `npm run build && npm run verify` 后重新提交 |
-| 跳转到的图片打不开 | 大概率是文件名特殊字符问题。运行 `npm test`，其中有专门针对 `#`、`?`、中文、空格的用例 |
+| 刷新页面图片不变 | 浏览器缓存了旧响应。确认 `/` 返回的是 `Cache-Control: no-store`，且**不是** 302 跳转（302 会让地址栏停在图片地址） |
+| 返回 502 并提示 out of sync | 索引与部署文件不一致。运行 `npm run build && npm run verify` 后重新部署 |
+| 接口返回的图片打不开 | 大概率是文件名特殊字符问题。运行 `npm test`，其中有专门针对 `#`、`?`、中文、空格的用例 |
 | 新增图片后线上没变化 | 确认已 `git push`，并在 Cloudflare 控制台确认本次构建成功 |
 | `npm run verify` 报「源文件全部存在」失败 | 索引过期（图片被移动或删除）。重新运行 `npm run build` |
 
@@ -383,7 +411,7 @@ Cloudflare API Token（**不需要** Access Key ID / Secret Access Key / S3 端�
 ## 部署进度
 
 - [x] 图片索引生成与校验脚本
-- [x] Pages Functions 随机跳转接口
+- [x] Pages Functions 随机图片接口（直接返回图片内容，不跳转）
 - [x] 缓存策略与路由隔离
 - [x] 自动化测试（53 项）
 - [x] 本地 Cloudflare 环境验证

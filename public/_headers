@@ -1,6 +1,6 @@
 # Cloudflare Pages 静态资源响应头
-# 说明：随机跳转接口 / 由 Functions 自身设置 Cache-Control: no-store，
-#      本文件只作用于静态资源（图片），不会影响接口的随机性。
+# 说明：随机图片接口 "/" 由 Functions 直接返回图片，并自行设置 Cache-Control: no-store；
+#      本文件只作用于 /images/** 下的静态资源，不会影响接口的随机性。
 
 # 静态图片：7 天浏览器/CDN 缓存 + 1 天 stale-while-revalidate。
 # 图片文件名不含内容哈希，若换成 immutable 会导致替换图片后长期无法生效，

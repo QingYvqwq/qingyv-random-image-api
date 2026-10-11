@@ -5,7 +5,7 @@ import path from 'node:path';
 import { PROJECT_ROOT } from '../scripts/lib/config.mjs';
 import { onRequest } from '../functions/index.js';
 import images from '../functions/_data/images.generated.js';
-import { makeContext } from './helpers.mjs';
+import { makeContext, directoryAssets } from './helpers.mjs';
 
 const PUBLIC_DIR = path.join(PROJECT_ROOT, 'public');
 
@@ -39,33 +39,42 @@ test('_headers 为静态图片配置了缓存，且接口本身不在这里声�
   assert.ok(!/no-store/.test(rules), '接口的 no-store 由函数自身设置，不应写进 _headers');
 });
 
-test('functions/index.js 正确导出 onRequest 并返回可用结果', async () => {
+test('functions/index.js 直接返回图片内容，不做任何跳转', async () => {
   assert.equal(typeof onRequest, 'function');
 
-  const response = await onRequest(makeContext('https://api.qingyv.top/'));
+  const deployDir = path.join(PUBLIC_DIR, 'images');
+  const built = images.length > 0 && existsSync(deployDir);
+  const context = makeContext(
+    'https://api.qingyv.top/',
+    'GET',
+    built ? { ASSETS: directoryAssets(PUBLIC_DIR) } : {}
+  );
+  const response = await onRequest(context);
 
   if (images.length === 0) {
     // 尚未运行 npm run index 时，索引为空，应返回 404 而不是崩溃
     assert.equal(response.status, 404);
     return;
   }
-
-  assert.equal(response.status, 302);
-  const location = response.headers.get('Location');
-  assert.ok(location.startsWith('https://api.qingyv.top/images/'), location);
-  assert.equal(response.headers.get('Cache-Control'), 'no-store, max-age=0, must-revalidate');
-
-  const relative = decodeURIComponent(new URL(location).pathname).replace(/^\//, '');
-  assert.ok(
-    images.some((image) => image.p === relative),
-    `跳转目标 ${relative} 必须存在于内嵌索引中`
-  );
-
-  // 已构建部署目录时，跳转目标必须真实存在
-  const deployDir = path.join(PUBLIC_DIR, 'images');
-  if (existsSync(deployDir)) {
-    assert.ok(existsSync(path.join(PUBLIC_DIR, relative)), `部署文件缺失: ${relative}`);
+  if (!built) {
+    // 索引已生成但尚未同步到 public/，此时会明确报 502 说明部署不同步
+    assert.equal(response.status, 502);
+    return;
   }
+
+  // 关键：必须是 200 + 图片内容，绝不能是 3xx，
+  // 否则浏览器地址栏会跳到图片地址，刷新时无法换图。
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Location'), null);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store, max-age=0, must-revalidate');
+  assert.match(response.headers.get('Content-Type'), /^image\//);
+
+  const body = Buffer.from(await response.arrayBuffer());
+  const match = images.find((image) => {
+    const file = path.join(PUBLIC_DIR, image.p);
+    return existsSync(file) && Buffer.compare(readFileSync(file), body) === 0;
+  });
+  assert.ok(match, '接口返回的内容必须是 public/ 下真实存在的图片');
 });
 
 test('内嵌索引中的每一项都是合法的相对路径（不泄露绝对路径）', () => {
